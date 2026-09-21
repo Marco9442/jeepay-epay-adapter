@@ -1,0 +1,14 @@
+.git
+.github
+.DS_Store
+.env
+.env.*
+*.db
+*.db-wal
+*.db-shm
+/data
+/bin
+/tmp
+/logs
+cover.out
+cover.html

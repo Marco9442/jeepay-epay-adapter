@@ -1,0 +1,27 @@
+# 生产形态：只运行适配器。把它放在 NewAPI 与 Jeepay 之间。
+services:
+  adapter:
+    image: ${ADAPTER_IMAGE:-ghcr.io/marco9442/jeepay-epay-adapter:latest}
+    build:
+      context: .
+      target: adapter
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      HTTP_ADDR: ":8080"
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://127.0.0.1:8080}
+      INTERNAL_BASE_URL: ${INTERNAL_BASE_URL:-http://adapter:8080}
+      EPAY_PID: ${EPAY_PID:?set EPAY_PID}
+      EPAY_KEY: ${EPAY_KEY:?set EPAY_KEY}
+      JEEPAY_BASE_URL: ${JEEPAY_BASE_URL:?set JEEPAY_BASE_URL}
+      JEEPAY_MCH_NO: ${JEEPAY_MCH_NO:?set JEEPAY_MCH_NO}
+      JEEPAY_APP_ID: ${JEEPAY_APP_ID:?set JEEPAY_APP_ID}
+      JEEPAY_APP_SECRET: ${JEEPAY_APP_SECRET:?set JEEPAY_APP_SECRET}
+      JEEPAY_WAY_CODE_WXPAY: ${JEEPAY_WAY_CODE_WXPAY:-WX_NATIVE}
+      SQLITE_PATH: /data/adapter.db
+    volumes:
+      - adapter-data:/data
+
+volumes:
+  adapter-data:

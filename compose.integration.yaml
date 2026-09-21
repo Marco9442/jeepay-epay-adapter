@@ -1,0 +1,63 @@
+# 真实 NewAPI + 适配器。微信支付上游缺证书时仍用 mock-jeepay（协议与 Jeepay 商户 API 一致）。
+name: jeepay-epay-int
+
+services:
+  mock-jeepay:
+    build:
+      context: .
+      target: mock-jeepay
+    environment:
+      HTTP_ADDR: ":9216"
+      PUBLIC_BASE_URL: http://127.0.0.1:19216
+      JEEPAY_MCH_NO: M1680000001
+      JEEPAY_APP_ID: 60cc09bce4b0f1c0b83761c9
+      JEEPAY_APP_SECRET: jeepay-dev-app-secret
+    ports:
+      - "19216:9216"
+
+  adapter:
+    build:
+      context: .
+      target: adapter
+    depends_on:
+      mock-jeepay:
+        condition: service_healthy
+    environment:
+      HTTP_ADDR: ":8080"
+      PUBLIC_BASE_URL: http://127.0.0.1:18080
+      INTERNAL_BASE_URL: http://adapter:8080
+      EPAY_PID: "1000"
+      EPAY_KEY: dev-epay-key
+      JEEPAY_BASE_URL: http://mock-jeepay:9216
+      JEEPAY_MCH_NO: M1680000001
+      JEEPAY_APP_ID: 60cc09bce4b0f1c0b83761c9
+      JEEPAY_APP_SECRET: jeepay-dev-app-secret
+      JEEPAY_WAY_CODE_WXPAY: WX_NATIVE
+      SQLITE_PATH: /data/adapter.db
+      NOTIFY_INTERVAL_SEC: "2"
+    volumes:
+      - adapter-int-data:/data
+    ports:
+      - "18080:8080"
+
+  new-api:
+    image: calciumion/new-api:latest
+    depends_on:
+      adapter:
+        condition: service_healthy
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - new-api-data:/data
+    ports:
+      - "13000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/status >/dev/null || curl -fsS http://127.0.0.1:3000/api/status >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 25s
+
+volumes:
+  adapter-int-data:
+  new-api-data:

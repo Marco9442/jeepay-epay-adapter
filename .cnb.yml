@@ -1,0 +1,48 @@
+# GitHub 把 main 推到本仓库后，由 CNB 自己构建并发布镜像。
+# 与 GHCR 使用同一份源码，不比较镜像 digest。
+
+main:
+  push:
+    - name: 构建并发布镜像
+      services:
+        - docker
+      stages:
+        - name: 构建并推送
+          script: |
+            set -eu
+            REG="${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}"
+            TAG="${CNB_COMMIT_SHORT}"
+            docker build \
+              --target adapter \
+              --build-arg GOPROXY=https://goproxy.cn,direct \
+              --label "org.opencontainers.image.source=https://github.com/Marco9442/jeepay-epay-adapter" \
+              --label "org.opencontainers.image.revision=${CNB_COMMIT}" \
+              --label "org.opencontainers.image.licenses=AGPL-3.0-or-later" \
+              -t "${REG}:${TAG}" \
+              -t "${REG}:latest" \
+              .
+            docker push "${REG}:${TAG}"
+            docker push "${REG}:latest"
+
+$:
+  api_trigger:
+    - name: 构建并发布镜像
+      services:
+        - docker
+      stages:
+        - name: 构建并推送
+          script: |
+            set -eu
+            REG="${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}"
+            TAG="${CNB_COMMIT_SHORT}"
+            docker build \
+              --target adapter \
+              --build-arg GOPROXY=https://goproxy.cn,direct \
+              --label "org.opencontainers.image.source=https://github.com/Marco9442/jeepay-epay-adapter" \
+              --label "org.opencontainers.image.revision=${CNB_COMMIT}" \
+              --label "org.opencontainers.image.licenses=AGPL-3.0-or-later" \
+              -t "${REG}:${TAG}" \
+              -t "${REG}:latest" \
+              .
+            docker push "${REG}:${TAG}"
+            docker push "${REG}:latest"
