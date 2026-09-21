@@ -56,7 +56,7 @@ jobs:
           set -euo pipefail
           name="${GITHUB_REPOSITORY#*/}"
           owner="${GITHUB_REPOSITORY_OWNER}"
-          for i in 1 2 3 4 5; do
+          for _ in 1 2 3 4 5; do
             if gh api --method PUT \
               "/users/${owner}/packages/container/${name}/visibility" \
               -f visibility=public; then
@@ -125,10 +125,5 @@ jobs:
             -d "{\"event\":\"api_trigger\",\"branch\":\"main\",\"title\":\"release from github\"}" \
             >/tmp/cnb-build.code
           echo "CNB 构建触发 HTTP $(cat /tmp/cnb-build.code)"
-          python3 -c 'import json,sys; p="/tmp/cnb-build.json";
-try:
-  d=json.load(open(p));
-  print("sn", d.get("sn") or "");
-  print("url", d.get("buildLogUrl") or "")
-except Exception:
-  print(open(p).read()[:400])'
+          python3 -c 'import json; d=json.load(open("/tmp/cnb-build.json")); print("sn", d.get("sn") or ""); print("url", d.get("buildLogUrl") or "")' || cat /tmp/cnb-build.json | head -c 400
+          echo
