@@ -61,7 +61,7 @@ services:
 
   payment:
     platform: linux/amd64
-    image: docker.cnb.cool/baorui.xyz/jeepay/jeepay-payment:latest
+    image: docker.cnb.cool/baorui.xyz/jeepay/jeepay-payment:v3.2.0
     depends_on:
       mysql:
         condition: service_healthy
@@ -82,7 +82,7 @@ services:
 
   manager:
     platform: linux/amd64
-    image: docker.cnb.cool/baorui.xyz/jeepay/jeepay-manager:latest
+    image: docker.cnb.cool/baorui.xyz/jeepay/jeepay-manager:v3.2.0
     depends_on:
       mysql:
         condition: service_healthy
