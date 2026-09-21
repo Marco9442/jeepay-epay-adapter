@@ -2,7 +2,7 @@
 
 发新版先改仓库根目录的 `VERSION`（必须是 `x.y.z`），再合进 `main`。GitHub Actions 会打 git 标签 `vX.Y.Z`，并并行做两件事：在 GitHub 构建并推 GHCR；把同一份代码推到 CNB，再触发 CNB 构建。两边都只打这一个版本标签，不打 `latest`，也不用提交号。源码相同，不必对镜像 digest。
 
-同一版号不能对应两次不同的提交：`VERSION` 没改就合进 `main`，发布会失败。重跑同一提交会跳过。
+`VERSION` 没改就合进 `main` 时，只同步代码，不覆盖已发布的版本镜像。发新镜像必须先改 `VERSION`。
 
 - GHCR：`ghcr.io/marco9442/jeepay-epay-adapter:v0.1.0`
 - CNB：`docker.cnb.cool/baorui.xyz/jeepay-epay-adapter:v0.1.0`
