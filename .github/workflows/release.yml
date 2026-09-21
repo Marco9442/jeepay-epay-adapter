@@ -1,4 +1,4 @@
-# 合并进 main 后并行发布：GHCR 构建推送，同时把代码推到 CNB 并触发那边的镜像构建。
+# 合并进 main 后按 VERSION 发固定版本镜像：GHCR 构建推送，同时把代码推到 CNB 并触发那边的构建。
 name: 发布镜像
 
 on:
@@ -11,13 +11,57 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      publish: ${{ steps.ver.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - id: ver
+        name: 读取并锁定版本
+        run: |
+          set -euo pipefail
+          raw="$(tr -d '[:space:]' < VERSION)"
+          if ! echo "$raw" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "VERSION 必须是 x.y.z，当前是: ${raw}" >&2
+            exit 1
+          fi
+          ver="v${raw}"
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+          head="$(git rev-parse HEAD)"
+          remote="$(git ls-remote --tags origin "refs/tags/${ver}" | awk '{print $1}')"
+          if [ -n "$remote" ]; then
+            if [ "$remote" = "$head" ]; then
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              echo "版本 ${ver} 已是当前提交，跳过发布。"
+              exit 0
+            fi
+            echo "VERSION ${raw} 已发布在 ${remote}，本次是 ${head}。请改 VERSION。" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$ver"
+          git push origin "refs/tags/${ver}"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+
   ghcr:
+    needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -34,19 +78,17 @@ jobs:
           set -euo pipefail
           owner="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
           img="ghcr.io/${owner}"
-          sha="$(git rev-parse --short HEAD)"
           src="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
           docker build \
             --target adapter \
             --label "org.opencontainers.image.source=${src}" \
             --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
+            --label "org.opencontainers.image.version=${VERSION}" \
             --label "org.opencontainers.image.licenses=AGPL-3.0-or-later" \
             --label "org.opencontainers.image.title=jeepay-epay-adapter" \
-            -t "${img}:latest" \
-            -t "${img}:sha-${sha}" \
+            -t "${img}:${VERSION}" \
             .
-          docker push "${img}:latest"
-          docker push "${img}:sha-${sha}"
+          docker push "${img}:${VERSION}"
 
       - name: 公开 GHCR 包
         continue-on-error: true
@@ -67,15 +109,19 @@ jobs:
           echo "包已推送，若仍是私有，在 GitHub Packages 里改一次可见性即可。"
 
   cnb:
+    needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
       CNB_REPO: ${{ vars.CNB_REPO }}
+      VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          fetch-tags: true
 
       - name: 推送到 CNB 并触发构建
         run: |
@@ -113,16 +159,20 @@ jobs:
             exit 1
           fi
 
-          git push --force "https://cnb:${CNB_TOKEN}@cnb.cool/${CNB_REPO}" "HEAD:refs/heads/main"
+          remote="https://cnb:${CNB_TOKEN}@cnb.cool/${CNB_REPO}"
+          git push --force "$remote" "HEAD:refs/heads/main"
+          git fetch origin "refs/tags/${VERSION}:refs/tags/${VERSION}" || true
+          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+            git push "$remote" "refs/tags/${VERSION}"
+          fi
 
-          # push 会走 .cnb.yml 的 main.push；再补一次 API，避免空仓库首推没建起来
           curl -sS -o /tmp/cnb-build.json -w "%{http_code}" \
             -X POST \
             -H "Authorization: Bearer ${CNB_TOKEN}" \
             -H "Accept: application/json" \
             -H "Content-Type: application/json" \
             "${api}/${CNB_REPO}/-/build/start" \
-            -d "{\"event\":\"api_trigger\",\"branch\":\"main\",\"title\":\"release from github\"}" \
+            -d "{\"event\":\"api_trigger\",\"branch\":\"main\",\"title\":\"release ${VERSION}\"}" \
             >/tmp/cnb-build.code
           echo "CNB 构建触发 HTTP $(cat /tmp/cnb-build.code)"
           python3 -c 'import json; d=json.load(open("/tmp/cnb-build.json")); print("sn", d.get("sn") or ""); print("url", d.get("buildLogUrl") or "")' || cat /tmp/cnb-build.json | head -c 400

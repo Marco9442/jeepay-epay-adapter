@@ -8,12 +8,12 @@ NewAPI 钱包 → submit.php → 适配器收银台 / 微信扫码
             → Jeepay 通知适配器 → 适配器通知 NewAPI 入账
 ```
 
-许可是 AGPL-3.0-or-later。合并进 `main` 会同时发 GitHub 和 CNB 两套镜像，源码相同，不必对 digest。
+许可是 AGPL-3.0-or-later。发新版时改 `VERSION`（x.y.z），合进 `main` 会打 git 标签 `vX.Y.Z`，并同时发 GitHub 和 CNB 两套同名镜像。标签只对应这一版，不再打 `latest`。源码相同，不必对 digest。
 
 | 来源 | 镜像 |
 | --- | --- |
-| GHCR | `ghcr.io/marco9442/jeepay-epay-adapter:latest` |
-| CNB | `docker.cnb.cool/baorui.xyz/jeepay-epay-adapter:latest` |
+| GHCR | `ghcr.io/marco9442/jeepay-epay-adapter:v0.1.0` |
+| CNB | `docker.cnb.cool/baorui.xyz/jeepay-epay-adapter:v0.1.0` |
 
 国内机器优先拉 CNB。生产流水线见 [docs/ci.md](docs/ci.md)。
 
@@ -29,7 +29,7 @@ docker compose up -d
 默认拉 GHCR。国内可改成：
 
 ```bash
-ADAPTER_IMAGE=docker.cnb.cool/baorui.xyz/jeepay-epay-adapter:latest docker compose up -d
+ADAPTER_IMAGE=docker.cnb.cool/baorui.xyz/jeepay-epay-adapter:v0.1.0 docker compose up -d
 ```
 
 | 变量 | 含义 |

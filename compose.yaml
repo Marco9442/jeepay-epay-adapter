@@ -1,7 +1,7 @@
 # 生产形态：只运行适配器。把它放在 NewAPI 与 Jeepay 之间。
 services:
   adapter:
-    image: ${ADAPTER_IMAGE:-ghcr.io/marco9442/jeepay-epay-adapter:latest}
+    image: ${ADAPTER_IMAGE:-ghcr.io/marco9442/jeepay-epay-adapter:v0.1.0}
     build:
       context: .
       target: adapter

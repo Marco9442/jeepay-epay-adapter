@@ -10,4 +10,4 @@
 
 本仓库只做易支付 ↔ Jeepay 适配。不要把易支付做进 Jeepay 核心，也不要在适配器里直连微信。
 
-许可是 AGPL-3.0-or-later。密钥只进环境变量和 GitHub Secret，不要写进仓库。
+许可是 AGPL-3.0-or-later。密钥只进环境变量和 GitHub Secret，不要写进仓库。镜像只打 `VERSION` 对应的 `vX.Y.Z`，不打 `latest`。
