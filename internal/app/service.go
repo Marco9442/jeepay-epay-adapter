@@ -8,28 +8,36 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/marco9442/jeepay-epay-adapter/internal/epay"
 	"github.com/marco9442/jeepay-epay-adapter/internal/jeepay"
+	"github.com/marco9442/jeepay-epay-adapter/internal/newapi"
 	"github.com/marco9442/jeepay-epay-adapter/internal/store"
 )
 
 type Service struct {
-	Cfg    Config
-	store  *store.Store
-	jeepay *jeepay.Client
+	Cfg      Config
+	store    *store.Store
+	jeepay   *jeepay.Client
+	quota    *newapi.Client
+	refundMu sync.Mutex
 }
 
 func New(cfg Config, st *store.Store, httpClient *http.Client) *Service {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 20 * time.Second}
 	}
-	return &Service{
+	svc := &Service{
 		Cfg:    cfg,
 		store:  st,
 		jeepay: jeepay.New(cfg.JeepayBaseURL, cfg.JeepayMchNo, cfg.JeepayAppID, cfg.JeepayAppSecret, httpClient),
 	}
+	if cfg.NewAPIBaseURL != "" {
+		svc.quota = newapi.New(cfg.NewAPIBaseURL, cfg.NewAPIAdminToken, httpClient)
+	}
+	return svc
 }
 
 // Submit 校验易支付下单并转给 Jeepay，返回收银台地址。

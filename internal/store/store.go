@@ -97,6 +97,15 @@ CREATE TABLE IF NOT EXISTS orders (
   UNIQUE(pid, out_trade_no)
 );
 CREATE INDEX IF NOT EXISTS idx_orders_notify ON orders(notify_status, next_notify_at);
+CREATE TABLE IF NOT EXISTS refund_debits (
+  refund_order_id TEXT PRIMARY KEY,
+  pay_order_id TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  quota INTEGER NOT NULL,
+  state TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_refund_pay_done ON refund_debits(pay_order_id) WHERE state = 'done';
 `)
 	return err
 }
@@ -135,6 +144,106 @@ func (s *Store) ByOutTradeNo(pid, outTradeNo string) (*Order, error) {
 
 func (s *Store) ByMchOrderNo(mchOrderNo string) (*Order, error) {
 	return s.get(`SELECT `+orderCols+` FROM orders WHERE out_trade_no=?`, mchOrderNo)
+}
+
+func (s *Store) ByPayOrderID(payOrderID string) (*Order, error) {
+	if payOrderID == "" {
+		return nil, ErrNotFound
+	}
+	return s.get(`SELECT `+orderCols+` FROM orders WHERE jeepay_pay_order_id=?
+ORDER BY CASE pay_status WHEN 'paid' THEN 0 ELSE 1 END, id DESC LIMIT 1`, payOrderID)
+}
+
+const (
+	RefundNew     = "new"
+	RefundPending = "pending"
+	RefundDone    = "done"
+	RefundPayDone = "pay-done"
+)
+
+type RefundDebit struct {
+	RefundOrderID string
+	PayOrderID    string
+	UserID        int
+	Quota         int
+	State         string
+	CreatedAt     int64
+}
+
+// ClaimRefund 记下这笔退款准备扣余额。同一退款单或同一支付单成功后不会再扣。
+func (s *Store) ClaimRefund(refundID, payOrderID string, userID, quota int) (string, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var state string
+	err = tx.QueryRow(`SELECT state FROM refund_debits WHERE refund_order_id=?`, refundID).Scan(&state)
+	if err == nil {
+		if err := tx.Commit(); err != nil {
+			return "", err
+		}
+		if state == RefundDone {
+			return RefundDone, nil
+		}
+		return RefundPending, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	var done int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM refund_debits WHERE pay_order_id=? AND state=?`, payOrderID, RefundDone).Scan(&done); err != nil {
+		return "", err
+	}
+	if done > 0 {
+		if err := tx.Commit(); err != nil {
+			return "", err
+		}
+		return RefundPayDone, nil
+	}
+	_, err = tx.Exec(`INSERT INTO refund_debits (refund_order_id, pay_order_id, user_id, quota, state, created_at)
+VALUES (?,?,?,?,?,?)`, refundID, payOrderID, userID, quota, RefundPending, time.Now().Unix())
+	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return RefundNew, nil
+}
+
+func (s *Store) RefundDebit(refundID string) (*RefundDebit, error) {
+	var d RefundDebit
+	err := s.db.QueryRow(`SELECT refund_order_id, pay_order_id, user_id, quota, state, created_at
+FROM refund_debits WHERE refund_order_id=?`, refundID).Scan(
+		&d.RefundOrderID, &d.PayOrderID, &d.UserID, &d.Quota, &d.State, &d.CreatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+func (s *Store) FinishRefund(refundID string) error {
+	res, err := s.db.Exec(`UPDATE refund_debits SET state=? WHERE refund_order_id=? AND state=?`,
+		RefundDone, refundID, RefundPending)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) ReleaseRefund(refundID string) error {
+	_, err := s.db.Exec(`DELETE FROM refund_debits WHERE refund_order_id=? AND state=?`, refundID, RefundPending)
+	return err
 }
 
 func (s *Store) UpdateJeepay(tradeNo, payOrderID, payDataType, payData string, state int) error {
