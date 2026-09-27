@@ -40,6 +40,8 @@ func Handler(svc *Service, log *slog.Logger) http.Handler {
 	mux.HandleFunc("POST /submit.php", s.submit)
 	mux.HandleFunc("GET /jeepay/notify", s.jeepayNotify)
 	mux.HandleFunc("POST /jeepay/notify", s.jeepayNotify)
+	mux.HandleFunc("GET /jeepay/refund-notify", s.jeepayRefundNotify)
+	mux.HandleFunc("POST /jeepay/refund-notify", s.jeepayRefundNotify)
 	mux.HandleFunc("GET /pay/{tradeNo}", s.payPage)
 	mux.HandleFunc("GET /pay/{tradeNo}/qr.png", s.payQR)
 	mux.HandleFunc("GET /pay/{tradeNo}/status", s.payStatus)
@@ -69,6 +71,20 @@ func (s *httpServer) jeepayNotify(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn("Jeepay 通知处理失败", "err", err)
 		http.Error(w, "fail", http.StatusBadRequest)
 		return
+	}
+	_, _ = w.Write([]byte("success"))
+}
+
+func (s *httpServer) jeepayRefundNotify(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	note, err := s.svc.HandleRefundNotify(r.Context(), r.Form)
+	if err != nil {
+		s.log.Warn("退款扣余额失败", "err", err)
+		http.Error(w, "fail", http.StatusBadRequest)
+		return
+	}
+	if note != "" {
+		s.log.Info("退款通知已处理", "result", note)
 	}
 	_, _ = w.Write([]byte("success"))
 }
