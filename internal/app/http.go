@@ -3,30 +3,36 @@ package app
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"html/template"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	qrcode "github.com/skip2/go-qrcode"
+
+	"github.com/marco9442/jeepay-epay-adapter/internal/store"
 )
 
 //go:embed pay.html
 var payHTML string
 
 type httpServer struct {
-	svc  *Service
-	log  *slog.Logger
-	payT *template.Template
+	svc    *Service
+	log    *slog.Logger
+	payT   *template.Template
+	notify *http.Client
 }
 
 func Handler(svc *Service, log *slog.Logger) http.Handler {
 	s := &httpServer{
-		svc:  svc,
-		log:  log,
-		payT: template.Must(template.New("pay").Parse(payHTML)),
+		svc:    svc,
+		log:    log,
+		payT:   template.Must(template.New("pay").Parse(payHTML)),
+		notify: &http.Client{Timeout: 15 * time.Second},
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
@@ -109,6 +115,23 @@ func (s *httpServer) payQR(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *httpServer) payStatus(w http.ResponseWriter, r *http.Request) {
+	tradeNo := r.PathValue("tradeNo")
+	order, err := s.svc.confirmFromJeepay(tradeNo)
+	if order == nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		s.log.Warn("读取订单失败", "trade", tradeNo, "err", err)
+		http.Error(w, "查询失败", http.StatusInternalServerError)
+		return
+	}
+	if err != nil {
+		s.log.Warn("尚未确认到付款", "trade", tradeNo, "err", err)
+	}
+	if order.PayStatus == store.PayPaid && order.NotifyStatus != store.NotifySucceeded {
+		deliver(s.notify, s.svc, order, s.log, 10)
+	}
 	c, ok := s.cashier(w, r)
 	if !ok {
 		return

@@ -12,8 +12,8 @@ NewAPI 钱包 → submit.php → 适配器收银台 / 微信扫码
 
 | 来源 | 镜像 |
 | --- | --- |
-| GHCR | `ghcr.io/marco9442/jeepay-epay-adapter:v0.1.0` |
-| CNB | `docker.cnb.cool/baorui.xyz/jeepay-epay-adapter:v0.1.0` |
+| GHCR | `ghcr.io/marco9442/jeepay-epay-adapter:v0.1.1` |
+| CNB | `docker.cnb.cool/baorui.xyz/jeepay-epay-adapter:v0.1.1` |
 
 国内机器优先拉 CNB。生产流水线见 [docs/ci.md](docs/ci.md)。
 
@@ -29,7 +29,7 @@ docker compose up -d
 默认拉 GHCR。国内可改成：
 
 ```bash
-ADAPTER_IMAGE=docker.cnb.cool/baorui.xyz/jeepay-epay-adapter:v0.1.0 docker compose up -d
+ADAPTER_IMAGE=docker.cnb.cool/baorui.xyz/jeepay-epay-adapter:v0.1.1 docker compose up -d
 ```
 
 | 变量 | 含义 |

@@ -185,6 +185,176 @@ func TestSubmitPayNotifyCredit(t *testing.T) {
 	t.Fatal("NewAPI 未入账")
 }
 
+func TestStatusPullsJeepayAndCredits(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	const (
+		secret  = "jeepay-secret"
+		mchNo   = "M1"
+		appID   = "A1"
+		epayPID = "1000"
+		epayKey = "epay-key"
+	)
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	queryState := "1"
+	queryAmount := "1000"
+
+	jeepaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw := map[string]any{}
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		params := map[string]string{}
+		for k, v := range raw {
+			params[k] = anyString(v)
+		}
+		if !jeepay.Verify(params, secret) {
+			_ = json.NewEncoder(w).Encode(map[string]any{"code": 1, "msg": "验签失败"})
+			return
+		}
+		var data map[string]string
+		switch r.URL.Path {
+		case "/api/pay/unifiedOrder":
+			data = map[string]string{
+				"payOrderId":  "PTEST2",
+				"mchOrderNo":  params["mchOrderNo"],
+				"orderState":  "1",
+				"payDataType": "codeUrl",
+				"payData":     "weixin://wxpay/bizpayurl?pr=test",
+			}
+		case "/api/pay/query":
+			data = map[string]string{
+				"payOrderId": "PTEST2",
+				"mchOrderNo": params["mchOrderNo"],
+				"amount":     queryAmount,
+				"state":      queryState,
+			}
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"code": 1, "msg": "unknown"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code": 0, "msg": "SUCCESS", "data": toAny(data), "sign": jeepay.Sign(data, secret),
+		})
+	}))
+	t.Cleanup(jeepaySrv.Close)
+
+	credits := 0
+	newapi := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		params := map[string]string{}
+		for k, vs := range r.PostForm {
+			if len(vs) > 0 {
+				params[k] = vs[0]
+			}
+		}
+		if !epay.Verify(params, epayKey) || params["trade_status"] != epay.StatusTradeSuccess {
+			_, _ = w.Write([]byte("fail"))
+			return
+		}
+		credits++
+		_, _ = w.Write([]byte("success"))
+	}))
+	t.Cleanup(newapi.Close)
+
+	svc := app.New(app.Config{
+		PublicBaseURL:   "http://127.0.0.1",
+		InternalBaseURL: "http://127.0.0.1",
+		EpayPID:         epayPID,
+		EpayKey:         epayKey,
+		JeepayBaseURL:   jeepaySrv.URL,
+		JeepayMchNo:     mchNo,
+		JeepayAppID:     appID,
+		JeepayAppSecret: secret,
+		WayCodeWxpay:    "WX_NATIVE",
+	}, st, jeepaySrv.Client())
+	adapter := httptest.NewServer(app.Handler(svc, log))
+	t.Cleanup(adapter.Close)
+	svc.Cfg.PublicBaseURL = adapter.URL
+	svc.Cfg.InternalBaseURL = adapter.URL
+
+	params := map[string]string{
+		"pid":          epayPID,
+		"type":         "wxpay",
+		"out_trade_no": "USR1NOTEST2",
+		"notify_url":   newapi.URL + "/api/user/epay/notify",
+		"name":         "TUC10",
+		"money":        "10.00",
+		"device":       "pc",
+		"return_url":   newapi.URL + "/usage-logs",
+	}
+	params["sign"] = epay.Sign(params, epayKey)
+	params["sign_type"] = "MD5"
+	form := url.Values{}
+	for k, v := range params {
+		form.Set(k, v)
+	}
+	req, err := http.NewRequest(http.MethodPost, adapter.URL+"/submit.php", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := noRedirectClient().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("submit status %d", resp.StatusCode)
+	}
+	tradeNo := strings.TrimPrefix(resp.Header.Get("Location"), adapter.URL+"/pay/")
+	statusURL := adapter.URL + "/pay/" + tradeNo + "/status"
+
+	body := getStatus(t, statusURL)
+	if body["state"] != store.PayCreated {
+		t.Fatalf("unpaid status %#v", body)
+	}
+	if credits != 0 {
+		t.Fatalf("credits %d", credits)
+	}
+
+	queryState = "2"
+	queryAmount = "1"
+	body = getStatus(t, statusURL)
+	if body["state"] != store.PayCreated || credits != 0 {
+		t.Fatalf("amount mismatch status %#v credits %d", body, credits)
+	}
+
+	queryAmount = "1000"
+	body = getStatus(t, statusURL)
+	if body["state"] != store.PayPaid {
+		t.Fatalf("paid status %#v", body)
+	}
+	if credits != 1 {
+		t.Fatalf("credits %d", credits)
+	}
+
+	body = getStatus(t, statusURL)
+	if body["state"] != store.PayPaid || credits != 1 {
+		t.Fatalf("second poll %#v credits %d", body, credits)
+	}
+}
+
+func getStatus(t *testing.T, rawURL string) map[string]string {
+	t.Helper()
+	resp, err := http.Get(rawURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
 func noRedirectClient() *http.Client {
 	return &http.Client{
 		CheckRedirect: func(*http.Request, []*http.Request) error {

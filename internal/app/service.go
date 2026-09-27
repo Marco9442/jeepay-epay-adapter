@@ -173,6 +173,29 @@ func (s *Service) HandleJeepayNotify(values url.Values) error {
 	return nil
 }
 
+// confirmFromJeepay 在本地还未支付时向 Jeepay 查单。查到成功且金额一致就记为已支付。
+// 查单失败或金额不一致时仍返回本地订单，调用方继续按未支付展示。
+func (s *Service) confirmFromJeepay(tradeNo string) (*store.Order, error) {
+	order, err := s.store.ByTradeNo(tradeNo)
+	if err != nil || order.PayStatus == store.PayPaid || order.PayStatus == store.PayFailed {
+		return order, err
+	}
+	q, err := s.jeepay.QueryByMchOrderNo(order.OutTradeNo)
+	if err != nil {
+		return order, fmt.Errorf("上游查单失败: %w", err)
+	}
+	if q.State != jeepay.StateSuccess {
+		return order, nil
+	}
+	if q.PayOrderID == "" || q.AmountFen != order.AmountFen {
+		return order, fmt.Errorf("上游查单结果与订单不一致")
+	}
+	if err := s.store.MarkPaid(order.TradeNo, q.PayOrderID); err != nil {
+		return order, err
+	}
+	return s.store.ByTradeNo(tradeNo)
+}
+
 // Cashier 是收银台只需要的视图，HTTP 层不必再碰订单存储。
 type Cashier struct {
 	TradeNo   string

@@ -61,6 +61,7 @@ type UnifiedOrderResp struct {
 type QueryResp struct {
 	PayOrderID string
 	State      int
+	AmountFen  int64
 }
 
 func (c *Client) UnifiedOrder(req UnifiedOrderReq) (*UnifiedOrderResp, error) {
@@ -125,6 +126,7 @@ func (c *Client) QueryByMchOrderNo(mchOrderNo string) (*QueryResp, error) {
 	return &QueryResp{
 		PayOrderID: str(data["payOrderId"]),
 		State:      asInt(data["state"]),
+		AmountFen:  asInt64(data["amount"]),
 	}, nil
 }
 

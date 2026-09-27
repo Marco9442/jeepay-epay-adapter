@@ -4,8 +4,8 @@
 
 `VERSION` 没改就合进 `main` 时，只同步代码，不覆盖已发布的版本镜像。发新镜像必须先改 `VERSION`。
 
-- GHCR：`ghcr.io/marco9442/jeepay-epay-adapter:v0.1.0`
-- CNB：`docker.cnb.cool/baorui.xyz/jeepay-epay-adapter:v0.1.0`
+- GHCR：`ghcr.io/marco9442/jeepay-epay-adapter:v0.1.1`
+- CNB：`docker.cnb.cool/baorui.xyz/jeepay-epay-adapter:v0.1.1`
 
 国内机器优先拉 CNB。生产 compose 默认钉 GHCR 的当前版本；换国内源时把 `ADAPTER_IMAGE` 换成上面的 CNB 地址，标签保持同一个 `vX.Y.Z`。
 
