@@ -246,6 +246,31 @@ func (s *Store) ReleaseRefund(refundID string) error {
 	return err
 }
 
+// RefundedOutTradeNos 返回该用户已整笔退款并扣过余额的充值单号。
+func (s *Store) RefundedOutTradeNos(userID int) ([]string, error) {
+	rows, err := s.db.Query(`
+SELECT o.out_trade_no
+FROM refund_debits d
+JOIN orders o ON o.jeepay_pay_order_id = d.pay_order_id
+WHERE d.user_id=? AND d.state=?
+ORDER BY d.created_at DESC, o.out_trade_no`, userID, RefundDone)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var tradeNo string
+		if err := rows.Scan(&tradeNo); err != nil {
+			return nil, err
+		}
+		if tradeNo != "" {
+			out = append(out, tradeNo)
+		}
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) UpdateJeepay(tradeNo, payOrderID, payDataType, payData string, state int) error {
 	_, err := s.db.Exec(`
 UPDATE orders SET jeepay_pay_order_id=?, pay_data_type=?, pay_data=?, jeepay_state=?

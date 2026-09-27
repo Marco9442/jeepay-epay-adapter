@@ -15,6 +15,9 @@ import (
 // ErrRejected 表示 NewAPI 明确拒绝，余额没有变化。
 var ErrRejected = errors.New("NewAPI 拒绝扣余额")
 
+// ErrUnauthenticated 表示调用者的登录状态无效。
+var ErrUnauthenticated = errors.New("NewAPI 登录无效")
+
 // ErrUncertain 表示请求没有明确结果，余额可能已经变化。
 var ErrUncertain = errors.New("NewAPI 扣余额结果不明")
 
@@ -148,6 +151,50 @@ func (c *Client) HasSubtract(ctx context.Context, userID, quota int, since int64
 		}
 	}
 	return false, nil
+}
+
+// SessionUser 用调用者自己的登录状态读取用户编号，不使用管理令牌。
+func (c *Client) SessionUser(ctx context.Context, authorization, cookie string) (int, error) {
+	authorization = strings.TrimSpace(authorization)
+	cookie = strings.TrimSpace(cookie)
+	if authorization == "" && cookie == "" {
+		return 0, ErrUnauthenticated
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/api/user/self", nil)
+	if err != nil {
+		return 0, err
+	}
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
+	}
+	if cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("请求 NewAPI 失败: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return 0, err
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return 0, ErrUnauthenticated
+	}
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("NewAPI HTTP %d", resp.StatusCode)
+	}
+	var body struct {
+		Success bool `json:"success"`
+		Data    struct {
+			ID int `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil || !body.Success || body.Data.ID <= 0 {
+		return 0, ErrUnauthenticated
+	}
+	return body.Data.ID, nil
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, dest any) error {

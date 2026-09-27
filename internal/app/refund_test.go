@@ -66,6 +66,38 @@ func TestRefundRejectsBadSignAndMissingToken(t *testing.T) {
 	}
 }
 
+func TestRefundedListReturnsOnlyThatUsersFullRefund(t *testing.T) {
+	env := newRefundEnv(t)
+	env.insertPaid("P2", "USR2NOaaa", "TUC10", 6441)
+	env.insertPaid("P3", "USR3NObbb", "TUC1", 678)
+	env.insertPaid("Ppartial", "USR2NOpart", "TUC10", 6441)
+	if _, status := env.postRefund(t, env.refundForm("R2", "P2", 6441, 6441, 2)); status != http.StatusOK {
+		t.Fatalf("user2 refund status %d", status)
+	}
+	if _, status := env.postRefund(t, env.refundForm("R3", "P3", 678, 678, 2)); status != http.StatusOK {
+		t.Fatalf("user3 refund status %d", status)
+	}
+	if _, status := env.postRefund(t, env.refundForm("Rpart", "Ppartial", 6441, 1000, 2)); status != http.StatusOK {
+		t.Fatalf("partial status %d", status)
+	}
+
+	body, status := env.getRefunded(t, "session=user2", "")
+	if status != http.StatusOK || body != `{"trade_nos":["USR2NOaaa"]}`+"\n" {
+		t.Fatalf("user2 status %d body %s", status, body)
+	}
+	body, status = env.getRefunded(t, "session=user3", "")
+	if status != http.StatusOK || body != `{"trade_nos":["USR3NObbb"]}`+"\n" {
+		t.Fatalf("user3 status %d body %s", status, body)
+	}
+	body, status = env.getRefunded(t, "", "Bearer user-2")
+	if status != http.StatusOK || !strings.Contains(body, "USR2NOaaa") || strings.Contains(body, "USR3NObbb") {
+		t.Fatalf("bearer status %d body %s", status, body)
+	}
+	if _, status := env.getRefunded(t, "", ""); status != http.StatusUnauthorized {
+		t.Fatalf("anonymous status %d", status)
+	}
+}
+
 func TestPendingRefundDoesNotSubtractTwice(t *testing.T) {
 	env := newRefundEnv(t)
 	env.insertPaid("P1", "USR2NOabc", "TUC10", 6441)
@@ -105,6 +137,16 @@ func newRefundEnv(t *testing.T) *refundEnv {
 		switch {
 		case r.URL.Path == "/api/status":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"quota_per_unit":500000,"quota_display_type":"USD"}}`))
+		case r.URL.Path == "/api/user/self":
+			switch {
+			case r.Header.Get("Cookie") == "session=user2" || r.Header.Get("Authorization") == "Bearer user-2":
+				_, _ = w.Write([]byte(`{"success":true,"data":{"id":2}}`))
+			case r.Header.Get("Cookie") == "session=user3":
+				_, _ = w.Write([]byte(`{"success":true,"data":{"id":3}}`))
+			default:
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"success":false}`))
+			}
 		case r.URL.Path == "/api/user/manage":
 			if r.Header.Get("Authorization") != "Bearer admin-token" {
 				w.WriteHeader(http.StatusUnauthorized)
@@ -156,7 +198,7 @@ func newRefundEnv(t *testing.T) *refundEnv {
 
 func (e *refundEnv) insertPaid(payOrderID, outTradeNo, name string, fen int64) {
 	order := &store.Order{
-		TradeNo:          "A1",
+		TradeNo:          "T" + payOrderID,
 		OutTradeNo:       outTradeNo,
 		PID:              "1000",
 		PayType:          "wxpay",
@@ -196,6 +238,27 @@ func (e *refundEnv) refundForm(refundID, payID string, payAmount, refundAmount, 
 		form.Set(k, v)
 	}
 	return form
+}
+
+func (e *refundEnv) getRefunded(t *testing.T, cookie, authorization string) (string, int) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, e.adapter.URL+"/refunded", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	return string(raw), resp.StatusCode
 }
 
 func (e *refundEnv) postRefund(t *testing.T, form url.Values) (string, int) {

@@ -109,6 +109,18 @@ func (s *Service) finishPendingRefund(ctx context.Context, refundID string) (str
 	return s.subtractRefund(ctx, refundID, row.UserID, row.Quota, 0)
 }
 
+// RefundedTradeNos 用调用者的登录状态核对用户，只返回这个人已整笔退款的充值单号。
+func (s *Service) RefundedTradeNos(ctx context.Context, authorization, cookie string) ([]string, error) {
+	if s.quota == nil {
+		return nil, fmt.Errorf("未配置 NewAPI")
+	}
+	userID, err := s.quota.SessionUser(ctx, authorization, cookie)
+	if err != nil {
+		return nil, err
+	}
+	return s.store.RefundedOutTradeNos(userID)
+}
+
 func (s *Service) subtractRefund(ctx context.Context, refundID string, userID, quota int, dollars int64) (string, error) {
 	err := s.quota.Subtract(ctx, userID, quota)
 	if err != nil {
