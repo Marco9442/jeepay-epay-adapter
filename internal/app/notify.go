@@ -57,12 +57,25 @@ func (w *Worker) tick() {
 }
 
 func (w *Worker) send(o *store.Order) {
+	deliver(w.HTTP, w.Svc, o, w.Log, w.MaxTry)
+}
+
+func deliver(client *http.Client, svc *Service, o *store.Order, log *slog.Logger, maxTry int) {
+	if log == nil {
+		log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
+	if maxTry <= 0 {
+		maxTry = 10
+	}
 	if o.NotifyURL == "" {
-		_ = w.Svc.store.NotifySucceeded(o.TradeNo)
+		_ = svc.store.NotifySucceeded(o.TradeNo)
 		return
 	}
-	form := w.Svc.epayNotify(o)
-	resp, err := w.HTTP.Post(o.NotifyURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
+	form := svc.epayNotify(o)
+	resp, err := client.Post(o.NotifyURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
 	body := ""
 	if err == nil {
 		defer resp.Body.Close()
@@ -70,21 +83,21 @@ func (w *Worker) send(o *store.Order) {
 		body = strings.TrimSpace(string(b))
 	}
 	if err == nil && strings.EqualFold(body, "success") {
-		if err := w.Svc.store.NotifySucceeded(o.TradeNo); err != nil {
-			w.Log.Error("更新通知成功状态失败", "trade", o.TradeNo, "err", err)
+		if err := svc.store.NotifySucceeded(o.TradeNo); err != nil {
+			log.Error("更新通知成功状态失败", "trade", o.TradeNo, "err", err)
 		}
 		return
 	}
 	attempts := o.NotifyAttempts + 1
-	giveUp := attempts >= w.MaxTry
+	giveUp := attempts >= maxTry
 	next := time.Now().Add(backoff(attempts)).Unix()
 	if giveUp {
 		next = 0
 	}
-	if err := w.Svc.store.NotifyRetry(o.TradeNo, attempts, next, giveUp); err != nil {
-		w.Log.Error("更新通知重试失败", "trade", o.TradeNo, "err", err)
+	if err := svc.store.NotifyRetry(o.TradeNo, attempts, next, giveUp); err != nil {
+		log.Error("更新通知重试失败", "trade", o.TradeNo, "err", err)
 	}
-	w.Log.Warn("易支付异步通知未成功", "trade", o.TradeNo, "attempt", attempts, "err", err, "body", body)
+	log.Warn("易支付异步通知未成功", "trade", o.TradeNo, "attempt", attempts, "err", err, "body", body)
 }
 
 func backoff(attempt int) time.Duration {
