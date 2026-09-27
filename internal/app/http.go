@@ -14,6 +14,7 @@ import (
 
 	qrcode "github.com/skip2/go-qrcode"
 
+	"github.com/marco9442/jeepay-epay-adapter/internal/newapi"
 	"github.com/marco9442/jeepay-epay-adapter/internal/store"
 )
 
@@ -42,6 +43,7 @@ func Handler(svc *Service, log *slog.Logger) http.Handler {
 	mux.HandleFunc("POST /jeepay/notify", s.jeepayNotify)
 	mux.HandleFunc("GET /jeepay/refund-notify", s.jeepayRefundNotify)
 	mux.HandleFunc("POST /jeepay/refund-notify", s.jeepayRefundNotify)
+	mux.HandleFunc("GET /refunded", s.refunded)
 	mux.HandleFunc("GET /pay/{tradeNo}", s.payPage)
 	mux.HandleFunc("GET /pay/{tradeNo}/qr.png", s.payQR)
 	mux.HandleFunc("GET /pay/{tradeNo}/status", s.payStatus)
@@ -87,6 +89,24 @@ func (s *httpServer) jeepayRefundNotify(w http.ResponseWriter, r *http.Request) 
 		s.log.Info("退款通知已处理", "result", note)
 	}
 	_, _ = w.Write([]byte("success"))
+}
+
+func (s *httpServer) refunded(w http.ResponseWriter, r *http.Request) {
+	nos, err := s.svc.RefundedTradeNos(r.Context(), r.Header.Get("Authorization"), r.Header.Get("Cookie"))
+	if err != nil {
+		s.log.Warn("读取已退款订单失败", "err", err)
+		status := http.StatusBadGateway
+		if errors.Is(err, newapi.ErrUnauthenticated) {
+			status = http.StatusUnauthorized
+		}
+		http.Error(w, "fail", status)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(struct {
+		TradeNos []string `json:"trade_nos"`
+	}{TradeNos: nos})
 }
 
 func (s *httpServer) cashier(w http.ResponseWriter, r *http.Request) (Cashier, bool) {
