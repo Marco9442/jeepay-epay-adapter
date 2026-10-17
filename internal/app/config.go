@@ -30,6 +30,14 @@ type Config struct {
 
 	NotifyInterval time.Duration
 	NotifyMaxTries int
+
+	OrderTTLSec    int
+	ExpireRequired bool
+	ExpireDBHost   string
+	ExpireDBPort   int
+	ExpireDBName   string
+	ExpireDBUser   string
+	ExpireDBPass   string
 }
 
 func FromEnv() (Config, error) {
@@ -49,7 +57,22 @@ func FromEnv() (Config, error) {
 		NewAPIAdminToken: env("NEWAPI_ADMIN_TOKEN", ""),
 		NotifyInterval:   time.Duration(envInt("NOTIFY_INTERVAL_SEC", 5)) * time.Second,
 		NotifyMaxTries:   envInt("NOTIFY_MAX_TRIES", 10),
+		ExpireDBHost:     env("PAY_EXPIRE_DB_HOST", "newapi-postgres"),
+		ExpireDBPort:     envInt("PAY_EXPIRE_DB_PORT", 5432),
+		ExpireDBName:     env("PAY_EXPIRE_DB_NAME", "new-api"),
+		ExpireDBUser:     env("PAY_EXPIRE_DB_USER", "pay_expire"),
+		ExpireDBPass:     env("PAY_EXPIRE_DB_PASSWORD", ""),
 	}
+	ttl, err := orderTTL()
+	if err != nil {
+		return Config{}, err
+	}
+	c.OrderTTLSec = ttl
+	required, err := expireRequired()
+	if err != nil {
+		return Config{}, err
+	}
+	c.ExpireRequired = required
 	if c.InternalBaseURL == "" {
 		c.InternalBaseURL = c.PublicBaseURL
 	}
@@ -78,6 +101,29 @@ func (c Config) WayCodeFor(epayType string) (string, error) {
 		return c.WayCodeWxpay, nil
 	default:
 		return "", fmt.Errorf("不支持的支付方式: %s", epayType)
+	}
+}
+
+func orderTTL() (int, error) {
+	raw := strings.TrimSpace(os.Getenv("PAY_ORDER_TTL_SEC"))
+	if raw == "" {
+		return 7200, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || (n != 3600 && n != 7200) {
+		return 0, fmt.Errorf("PAY_ORDER_TTL_SEC 只接受 3600 或 7200")
+	}
+	return n, nil
+}
+
+func expireRequired() (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("PAY_EXPIRE_REQUIRED"))) {
+	case "", "1", "true", "yes":
+		return true, nil
+	case "0", "false", "no":
+		return false, nil
+	default:
+		return false, fmt.Errorf("PAY_EXPIRE_REQUIRED 只接受 0 或 1")
 	}
 }
 

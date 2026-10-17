@@ -47,6 +47,8 @@ Jeepay：普通商户应用配好 `WX_NATIVE` 和微信证书。适配器会把 
 
 订单在本地 SQLite（默认 `/data/adapter.db`）。入账通知失败会从 15 秒起重试，封顶 10 分钟，最多 10 次。`wxpay` 映射为 `WX_NATIVE`。金额用 NewAPI 提交的原始字符串，转 Jeepay 时换成整数分。
 
+未支付单在截止前 90 秒开始关单。`PAY_ORDER_TTL_SEC` 只接受 3600 或 7200，默认 7200，并传给 Jeepay 的 `expiredTime`。关单循环在通知循环旁边，每 30 秒看一批，不在下单和查单请求上做。钱包只通过 `pay.expire_epay_topup` 把仍待支付的易支付单改成过期。密码用 `PAY_EXPIRE_DB_PASSWORD`，不进 Git。密码为空时进程仍启动，新下单拒绝，已有通知继续。mock 堆栈设 `PAY_EXPIRE_REQUIRED=0`。当前已发布镜像仍是 v0.1.3；0.1.4 要合进 `main` 后才会有镜像。
+
 整笔退款成功后，Jeepay 把结果 POST 到适配器的 `/jeepay/refund-notify`。适配器验签后，按订单里的到账美元扣 NewAPI 余额，折扣送出的部分一起扣。只退一部分或退款失败时不扣。同一笔退款只扣一次。`NEWAPI_ADMIN_TOKEN` 是 NewAPI root 的系统访问令牌，只放环境变量。`GET /refunded` 用调用者自己的登录状态核对用户，只返回这个人已整笔退款并扣过余额的充值单号。
 
 ## 开发

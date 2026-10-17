@@ -11,6 +11,7 @@ import (
 
 	"github.com/marco9442/jeepay-epay-adapter/internal/app"
 	"github.com/marco9442/jeepay-epay-adapter/internal/store"
+	"github.com/marco9442/jeepay-epay-adapter/internal/wallet"
 )
 
 func main() {
@@ -28,10 +29,30 @@ func main() {
 	defer st.Close()
 
 	svc := app.New(cfg, st, &http.Client{Timeout: 20 * time.Second})
+	if cfg.ExpireRequired {
+		exp := app.WalletExpirer(wallet.Unavailable{})
+		client, err := wallet.Open(wallet.Config{
+			Host: cfg.ExpireDBHost,
+			Port: cfg.ExpireDBPort,
+			Name: cfg.ExpireDBName,
+			User: cfg.ExpireDBUser,
+			Pass: cfg.ExpireDBPass,
+		})
+		if err != nil {
+			log.Warn("关单库未就绪，新的充值会拒绝", "err", err)
+		} else {
+			defer client.Close()
+			exp = client
+		}
+		svc.SetWallet(exp)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	go (&app.Worker{Svc: svc, Log: log, Every: cfg.NotifyInterval, MaxTry: cfg.NotifyMaxTries}).Run(ctx)
+	if cfg.ExpireRequired {
+		go (&app.Closer{Svc: svc, Log: log}).Run(ctx)
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
