@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -22,8 +23,17 @@ type Service struct {
 	store    *store.Store
 	jeepay   *jeepay.Client
 	quota    *newapi.Client
+	wallet   WalletExpirer
 	refundMu sync.Mutex
 }
+
+// WalletExpirer 只把仍待支付的易支付充值单改成失败。
+type WalletExpirer interface {
+	Ready(ctx context.Context) error
+	Expire(ctx context.Context, tradeNo string) (string, error)
+}
+
+func (s *Service) SetWallet(w WalletExpirer) { s.wallet = w }
 
 func New(cfg Config, st *store.Store, httpClient *http.Client) *Service {
 	if httpClient == nil {
@@ -68,6 +78,11 @@ func (s *Service) Submit(params map[string]string, clientIP string) (string, err
 	if exist != nil && (exist.PayStatus == store.PayPaid || exist.PayData != "") {
 		return s.payPageURL(exist), nil
 	}
+	if s.Cfg.ExpireRequired {
+		if err := s.expireReady(); err != nil {
+			return "", err
+		}
+	}
 
 	name := params["name"]
 	if name == "" {
@@ -104,16 +119,24 @@ func (s *Service) Submit(params map[string]string, clientIP string) (string, err
 	if clientIP == "" {
 		clientIP = "127.0.0.1"
 	}
+	if s.Cfg.OrderTTLSec > 0 && order.ExpireAt == 0 {
+		expireAt := time.Now().Unix() + int64(s.Cfg.OrderTTLSec)
+		if err := s.store.SetExpireAt(order.TradeNo, expireAt); err != nil {
+			return "", err
+		}
+		order.ExpireAt = expireAt
+	}
 	resp, err := s.jeepay.UnifiedOrder(jeepay.UnifiedOrderReq{
-		MchOrderNo:   order.OutTradeNo,
-		WayCode:      wayCode,
-		AmountFen:    order.AmountFen,
-		Subject:      order.Name,
-		Body:         order.Name,
-		NotifyURL:    s.Cfg.InternalBaseURL + "/jeepay/notify",
-		ReturnURL:    s.payPageURL(order),
-		ClientIP:     clientIP,
-		ChannelExtra: `{"payDataType":"codeUrl"}`,
+		MchOrderNo:     order.OutTradeNo,
+		WayCode:        wayCode,
+		AmountFen:      order.AmountFen,
+		Subject:        order.Name,
+		Body:           order.Name,
+		NotifyURL:      s.Cfg.InternalBaseURL + "/jeepay/notify",
+		ReturnURL:      s.payPageURL(order),
+		ClientIP:       clientIP,
+		ChannelExtra:   `{"payDataType":"codeUrl"}`,
+		ExpiredTimeSec: s.Cfg.OrderTTLSec,
 	})
 	if err != nil {
 		if recovered, recErr := s.recoverExistingJeepay(order); recErr == nil {
@@ -235,6 +258,18 @@ func (s *Service) Cashier(tradeNo string) (Cashier, error) {
 		QRContent: qr,
 		State:     o.PayStatus,
 	}, nil
+}
+
+func (s *Service) expireReady() error {
+	if s.wallet == nil {
+		return fmt.Errorf("关单未就绪")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.wallet.Ready(ctx); err != nil {
+		return fmt.Errorf("关单未就绪")
+	}
+	return nil
 }
 
 func (s *Service) payPageURL(order *store.Order) string {

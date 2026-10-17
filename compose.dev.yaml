@@ -35,6 +35,7 @@ services:
       JEEPAY_WAY_CODE_WXPAY: WX_NATIVE
       SQLITE_PATH: /data/adapter.db
       NOTIFY_INTERVAL_SEC: "2"
+      PAY_EXPIRE_REQUIRED: "0"
     volumes:
       - adapter-dev-data:/data
     ports:

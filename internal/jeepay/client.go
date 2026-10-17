@@ -12,9 +12,16 @@ import (
 )
 
 const (
+	StateInit      = 0
 	StateIng       = 1
 	StateSuccess   = 2
+	StateClosed    = 6
 	PayDataCodeURL = "codeUrl"
+
+	CloseSuccess  = "success"
+	ClosePaid     = "paid"
+	CloseRejected = "rejected"
+	CloseFailed   = "failed"
 )
 
 type Client struct {
@@ -39,16 +46,17 @@ func New(baseURL, mchNo, appID, secret string, httpClient *http.Client) *Client 
 }
 
 type UnifiedOrderReq struct {
-	MchOrderNo   string
-	WayCode      string
-	AmountFen    int64
-	Currency     string
-	Subject      string
-	Body         string
-	NotifyURL    string
-	ReturnURL    string
-	ClientIP     string
-	ChannelExtra string
+	MchOrderNo     string
+	WayCode        string
+	AmountFen      int64
+	Currency       string
+	Subject        string
+	Body           string
+	NotifyURL      string
+	ReturnURL      string
+	ClientIP       string
+	ChannelExtra   string
+	ExpiredTimeSec int
 }
 
 type UnifiedOrderResp struct {
@@ -68,28 +76,23 @@ func (c *Client) UnifiedOrder(req UnifiedOrderReq) (*UnifiedOrderResp, error) {
 	if req.Currency == "" {
 		req.Currency = "cny"
 	}
-	params := map[string]string{
-		"mchNo":      c.MchNo,
-		"appId":      c.AppID,
-		"mchOrderNo": req.MchOrderNo,
-		"wayCode":    req.WayCode,
-		"amount":     strconv.FormatInt(req.AmountFen, 10),
-		"currency":   req.Currency,
-		"subject":    req.Subject,
-		"body":       req.Body,
-		"notifyUrl":  req.NotifyURL,
-		"returnUrl":  req.ReturnURL,
-		"clientIp":   req.ClientIP,
-		"reqTime":    strconv.FormatInt(time.Now().UnixMilli(), 10),
-		"version":    "1.0",
-		"signType":   "MD5",
-	}
+	params := c.mchParams()
+	params["mchOrderNo"] = req.MchOrderNo
+	params["wayCode"] = req.WayCode
+	params["amount"] = strconv.FormatInt(req.AmountFen, 10)
+	params["currency"] = req.Currency
+	params["subject"] = req.Subject
+	params["body"] = req.Body
+	params["notifyUrl"] = req.NotifyURL
+	params["returnUrl"] = req.ReturnURL
+	params["clientIp"] = req.ClientIP
 	if req.ChannelExtra != "" {
 		params["channelExtra"] = req.ChannelExtra
 	}
-	params["sign"] = Sign(params, c.AppSecret)
-
-	raw, err := c.postJSON("/api/pay/unifiedOrder", params)
+	if req.ExpiredTimeSec > 0 {
+		params["expiredTime"] = strconv.Itoa(req.ExpiredTimeSec)
+	}
+	raw, err := c.signedPost("/api/pay/unifiedOrder", params)
 	if err != nil {
 		return nil, err
 	}
@@ -106,16 +109,9 @@ func (c *Client) UnifiedOrder(req UnifiedOrderReq) (*UnifiedOrderResp, error) {
 }
 
 func (c *Client) QueryByMchOrderNo(mchOrderNo string) (*QueryResp, error) {
-	params := map[string]string{
-		"mchNo":      c.MchNo,
-		"appId":      c.AppID,
-		"mchOrderNo": mchOrderNo,
-		"reqTime":    strconv.FormatInt(time.Now().UnixMilli(), 10),
-		"version":    "1.0",
-		"signType":   "MD5",
-	}
-	params["sign"] = Sign(params, c.AppSecret)
-	raw, err := c.postJSON("/api/pay/query", params)
+	params := c.mchParams()
+	params["mchOrderNo"] = mchOrderNo
+	raw, err := c.signedPost("/api/pay/query", params)
 	if err != nil {
 		return nil, err
 	}
@@ -130,16 +126,73 @@ func (c *Client) QueryByMchOrderNo(mchOrderNo string) (*QueryResp, error) {
 	}, nil
 }
 
+type CloseOutcome struct {
+	Kind string
+	Msg  string
+}
+
+// CloseByMchOrderNo 调用商户关单。网络失败返回 error。业务拒绝放在 Kind，不当成网络失败。
+func (c *Client) CloseByMchOrderNo(mchOrderNo string) (CloseOutcome, error) {
+	params := c.mchParams()
+	params["mchOrderNo"] = mchOrderNo
+	raw, err := c.signedPost("/api/pay/close", params)
+	if err != nil {
+		return CloseOutcome{}, err
+	}
+	msg := str(raw["msg"])
+	if asInt(raw["code"]) != 0 {
+		return CloseOutcome{Kind: ClassifyClose(asInt(raw["code"]), msg), Msg: msg}, nil
+	}
+	data, _ := raw["data"].(map[string]any)
+	if data == nil {
+		data = map[string]any{}
+	}
+	if err := verifyDataSign(data, str(raw["sign"]), c.AppSecret); err != nil {
+		return CloseOutcome{Kind: CloseFailed, Msg: msg}, nil
+	}
+	return CloseOutcome{Kind: CloseSuccess, Msg: msg}, nil
+}
+
+// ClassifyClose 只把明确的已支付文案当成已支付。其余失败都不能当作关单成功。
+func ClassifyClose(code int, msg string) string {
+	if code == 0 {
+		return CloseSuccess
+	}
+	upper := strings.ToUpper(msg)
+	if strings.Contains(upper, "ORDERPAID") || strings.Contains(msg, "已支付") {
+		return ClosePaid
+	}
+	if strings.Contains(msg, "当前订单不可关闭") {
+		return CloseRejected
+	}
+	return CloseFailed
+}
+
+func (c *Client) mchParams() map[string]string {
+	return map[string]string{
+		"mchNo":    c.MchNo,
+		"appId":    c.AppID,
+		"reqTime":  strconv.FormatInt(time.Now().UnixMilli(), 10),
+		"version":  "1.0",
+		"signType": "MD5",
+	}
+}
+
+func (c *Client) signedPost(path string, params map[string]string) (map[string]any, error) {
+	params["sign"] = Sign(params, c.AppSecret)
+	return c.postJSON(path, params)
+}
+
 func (c *Client) postJSON(path string, params map[string]string) (map[string]any, error) {
 	body := make(map[string]any, len(params))
 	for k, v := range params {
 		if v == "" {
 			continue
 		}
-		if k == "amount" {
+		if k == "amount" || k == "expiredTime" {
 			n, err := strconv.ParseInt(v, 10, 64)
 			if err != nil {
-				return nil, fmt.Errorf("amount: %w", err)
+				return nil, fmt.Errorf("%s: %w", k, err)
 			}
 			body[k] = n
 			continue

@@ -46,6 +46,9 @@ type Order struct {
 	NextNotifyAt     int64
 	CreatedAt        int64
 	PaidAt           int64
+	ExpireAt         int64
+	ChannelClosedAt  int64
+	ExpireBlocked    bool
 }
 
 type Store struct {
@@ -107,6 +110,21 @@ CREATE TABLE IF NOT EXISTS refund_debits (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_refund_pay_done ON refund_debits(pay_order_id) WHERE state = 'done';
 `)
+	if err != nil {
+		return err
+	}
+	for _, stmt := range []string{
+		`ALTER TABLE orders ADD COLUMN expire_at INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE orders ADD COLUMN channel_closed_at INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE orders ADD COLUMN expire_blocked INTEGER NOT NULL DEFAULT 0`,
+		`CREATE INDEX IF NOT EXISTS idx_orders_expire ON orders(pay_status, expire_at)`,
+	} {
+		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+	// 旧行没有截止时间。按创建时间加 2 小时补一次，不跟随后来改小的配置。
+	_, err = s.db.Exec(`UPDATE orders SET expire_at = created_at + 7200 WHERE expire_at = 0 AND pay_status = ?`, PayCreated)
 	return err
 }
 
@@ -307,6 +325,61 @@ func (s *Store) MarkFailed(tradeNo string) error {
 	return err
 }
 
+func (s *Store) SetExpireAt(tradeNo string, expireAt int64) error {
+	_, err := s.db.Exec(`UPDATE orders SET expire_at=? WHERE trade_no=? AND expire_at=0`, expireAt, tradeNo)
+	return err
+}
+
+func (s *Store) DueCloses(dueAt int64, limit int) ([]*Order, error) {
+	rows, err := s.db.Query(`
+SELECT `+orderCols+` FROM orders
+WHERE pay_status=? AND expire_blocked=0 AND expire_at>0 AND expire_at<=?
+ORDER BY expire_at ASC LIMIT ?`, PayCreated, dueAt, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Order
+	for rows.Next() {
+		o, err := scanOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SetChannelClosed(tradeNo string, at int64) error {
+	_, err := s.db.Exec(`
+UPDATE orders SET channel_closed_at=?
+WHERE trade_no=? AND pay_status=? AND channel_closed_at=0`, at, tradeNo, PayCreated)
+	return err
+}
+
+func (s *Store) BlockExpire(tradeNo string) error {
+	_, err := s.db.Exec(`UPDATE orders SET expire_blocked=1 WHERE trade_no=? AND pay_status=?`, tradeNo, PayCreated)
+	return err
+}
+
+func (s *Store) MarkFailedIfCreated(tradeNo string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE orders SET pay_status=? WHERE trade_no=? AND pay_status=?`, PayFailed, tradeNo, PayCreated)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+func (s *Store) StuckCloseCount(now, slack int64) (int, error) {
+	var n int
+	err := s.db.QueryRow(`
+SELECT COUNT(*) FROM orders
+WHERE pay_status=? AND expire_blocked=0 AND expire_at>0 AND expire_at + ? <= ?`,
+		PayCreated, slack, now).Scan(&n)
+	return n, err
+}
+
 func (s *Store) DueNotifies(limit int, now int64) ([]*Order, error) {
 	rows, err := s.db.Query(`
 SELECT `+orderCols+` FROM orders
@@ -344,7 +417,8 @@ func (s *Store) NotifyRetry(tradeNo string, attempts int, nextAt int64, giveUp b
 
 const orderCols = `id, trade_no, out_trade_no, pid, pay_type, name, money, amount_fen,
  notify_url, return_url, jeepay_pay_order_id, jeepay_state, pay_data_type, pay_data,
- pay_status, notify_status, notify_attempts, next_notify_at, created_at, paid_at`
+ pay_status, notify_status, notify_attempts, next_notify_at, created_at, paid_at,
+ expire_at, channel_closed_at, expire_blocked`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -360,11 +434,14 @@ func (s *Store) get(q string, args ...any) (*Order, error) {
 
 func scanOrder(sc rowScanner) (*Order, error) {
 	var o Order
+	var blocked int
 	err := sc.Scan(
 		&o.ID, &o.TradeNo, &o.OutTradeNo, &o.PID, &o.PayType, &o.Name, &o.Money, &o.AmountFen,
 		&o.NotifyURL, &o.ReturnURL, &o.JeepayPayOrderID, &o.JeepayState, &o.PayDataType, &o.PayData,
 		&o.PayStatus, &o.NotifyStatus, &o.NotifyAttempts, &o.NextNotifyAt, &o.CreatedAt, &o.PaidAt,
+		&o.ExpireAt, &o.ChannelClosedAt, &blocked,
 	)
+	o.ExpireBlocked = blocked != 0
 	if err != nil {
 		return nil, err
 	}
