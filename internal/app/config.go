@@ -95,10 +95,14 @@ func FromEnv() (Config, error) {
 	return c, nil
 }
 
+const wayCodeAlipay = "ALI_OC"
+
 func (c Config) WayCodeFor(epayType string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(epayType)) {
 	case "wxpay":
 		return c.WayCodeWxpay, nil
+	case "alipay":
+		return wayCodeAlipay, nil
 	default:
 		return "", fmt.Errorf("不支持的支付方式: %s", epayType)
 	}
